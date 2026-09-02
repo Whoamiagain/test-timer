@@ -162,7 +162,7 @@ async def finalize_admin_embed(
     title="Title or purpose of the timer",
     hours="Duration hours",
     minutes="Duration minutes",
-    member="Member in question (optional)",
+    user="Member in question (optional)",
     notes="Additional notes (optional)",
 )
 async def custom_timer(
