@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+import datetime
 
 load_dotenv()
 
@@ -78,50 +79,73 @@ async def run_admin_timer(
     total_seconds: int,
     target_channel: discord.TextChannel = None,
 ):
-  remaining = total_seconds
-  update_interval = 15
+  # Calculate exact UTC end time
+  now = discord.utils.utcnow()
+  end_time = now + datetime.timedelta(seconds=total_seconds)
+  end_timestamp = int(end_time.timestamp())
+
+  # Set Discord's native dynamic timestamp (<t:TIMESTAMP:R> automatically ticks on user screens)
+  try:
+    embed = admin_msg.embeds[0]
+    embed.set_field_at(
+        2,
+        name="Time Remaining",
+        value=f"⏳ Ending <t:{end_timestamp}:R> (<t:{end_timestamp}:f>)",
+        inline=False,
+    )
+    await admin_msg.edit(embed=embed)
+  except Exception as e:
+    print(f"Error setting initial dynamic timestamp: {e}")
 
   try:
-    while remaining > 0:
-      await asyncio.sleep(update_interval)
-      remaining -= update_interval
+    while True:
+      current_now = discord.utils.utcnow()
+      remaining_seconds = (end_time - current_now).total_seconds()
 
-      # Check if ticket channel was deleted manually from Discord
+      # Check if time is up
+      if remaining_seconds <= 0:
+        break
+
+      # Sleep in 60-second chunks (or remaining time if less than a minute)
+      sleep_time = min(60, remaining_seconds)
+      await asyncio.sleep(sleep_time)
+
+      # Check if target ticket channel was deleted manually
       if target_channel:
-        fetched = target_channel.guild.get_channel(target_channel.id)
-        if fetched is None:
-          await finalize_admin_embed(
-              admin_msg, "✅ **Closed Early** (Ticket Deleted)"
-          )
-          return
-
-      # Update countdown embed
-      embed = admin_msg.embeds[0]
-      embed.set_field_at(
-          2,
-          name="Time Remaining",
-          value=f"⏳ `{format_time(remaining)}`",
-          inline=False,
-      )
-      await admin_msg.edit(embed=embed)
+        try:
+          fetched = target_channel.guild.get_channel(target_channel.id)
+          if fetched is None:
+            await finalize_admin_embed(
+                admin_msg, "✅ **Closed Early** (Ticket Deleted)"
+            )
+            return
+        except Exception:
+          pass  # Ignore temporary network glitches during check
 
     # Natural Expiration
     if target_channel:
-      await target_channel.send(
-          "⏰ **Timer expired.** Auto-closing ticket now..."
-      )
-      await asyncio.sleep(2)
-      await target_channel.delete(reason="Ticket timer expired.")
+      try:
+        await target_channel.send(
+            "⏰ **Timer expired.** Auto-closing ticket now..."
+        )
+        await asyncio.sleep(2)
+        await target_channel.delete(reason="Ticket timer expired.")
+      except discord.NotFound:
+        pass  # Already deleted
+      except Exception as e:
+        print(f"Error deleting ticket channel: {e}")
 
     await finalize_admin_embed(
         admin_msg, "⏰ **Timer Expired**", color=discord.Color.red()
     )
 
   except asyncio.CancelledError:
-    # Triggered when staff clicks the 'Cancel Timer' button
+    # Triggered when staff clicks 'Cancel Timer'
     await finalize_admin_embed(
         admin_msg, "🛑 **Cancelled Early**", color=discord.Color.gold()
     )
+  except Exception as e:
+    print(f"Unexpected error in timer loop: {e}")
   finally:
     active_timers.pop(admin_msg.id, None)
 
